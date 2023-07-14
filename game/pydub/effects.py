@@ -1,12 +1,13 @@
 import sys
 import math
 import array
+
+from game.pydub import pyaudioop
 from .utils import (
     db_to_float,
     ratio_to_db,
     register_pydub_effect,
     make_chunks,
-    audioop,
     get_min_max_value
 )
 from .silence import split_on_silence
@@ -178,7 +179,7 @@ def compress_dynamic_range(seg, threshold=-20.0, ratio=4.0, attack=5.0, release=
         
         frame = seg.get_frame(i)
         if attenuation != 0.0:
-            frame = audioop.mul(frame,
+            frame = pyaudioop.mul(frame,
                                 seg.sample_width,
                                 db_to_float(-attenuation))
         
@@ -197,7 +198,7 @@ def invert_phase(seg, channels=(1, 1)):
     Note that mono AudioSegments will become stereo.
     """
     if channels == (1, 1):
-        inverted = audioop.mul(seg._data, seg.sample_width, -1.0)  
+        inverted = pyaudioop.mul(seg._data, seg.sample_width, -1.0)  
         return seg._spawn(data=inverted)
     
     else:
@@ -328,13 +329,13 @@ def apply_gain_stereo(seg, left_gain=0.0, right_gain=0.0):
     l_mult_factor = db_to_float(left_gain)
     r_mult_factor = db_to_float(right_gain)
     
-    left_data = audioop.mul(left._data, left.sample_width, l_mult_factor)
-    left_data = audioop.tostereo(left_data, left.sample_width, 1, 0)
+    left_data = pyaudioop.mul(left._data, left.sample_width, l_mult_factor)
+    left_data = pyaudioop.tostereo(left_data, left.sample_width, 1, 0)
     
-    right_data = audioop.mul(right._data, right.sample_width, r_mult_factor)
-    right_data = audioop.tostereo(right_data, right.sample_width, 0, 1)
+    right_data = pyaudioop.mul(right._data, right.sample_width, r_mult_factor)
+    right_data = pyaudioop.tostereo(right_data, right.sample_width, 0, 1)
     
-    output = audioop.add(left_data, right_data, seg.sample_width)
+    output = pyaudioop.add(left_data, right_data, seg.sample_width)
     
     return seg._spawn(data=output,
                 overrides={'channels': 2,

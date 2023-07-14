@@ -4,9 +4,10 @@ import array
 import os
 import subprocess
 from tempfile import TemporaryFile, NamedTemporaryFile
-import wave
 import sys
 import struct
+
+from game.pydub import pyaudioop, pywave
 from .logging_utils import log_conversion, log_subprocess_output
 from .utils import mediainfo_json, fsdecode
 import base64
@@ -30,7 +31,6 @@ from .utils import (
     ratio_to_db,
     get_encoder_name,
     get_array_type,
-    audioop,
 )
 from .exceptions import (
     TooManyMissingFrames,
@@ -230,10 +230,10 @@ class AudioSegment(object):
             self._data = wav_data.raw_data
             if self.sample_width == 1:
                 # convert from unsigned integers in wav
-                self._data = audioop.bias(self._data, 1, -128)
+                self._data = pyaudioop.bias(self._data, 1, -128)
 
         # Convert 24-bit audio to 32-bit audio.
-        # (stdlib audioop and array modules do not support 24-bit data)
+        # (stdlib pyaudioop and array modules do not support 24-bit data)
         if self.sample_width == 3:
             byte_buffer = BytesIO()
 
@@ -328,7 +328,7 @@ class AudioSegment(object):
                     "You should never be filling in "
                     "   more than 2 ms with silence here, "
                     "missing frames: %s" % missing_frames)
-            silence = audioop.mul(data[:self.frame_width],
+            silence = pyaudioop.mul(data[:self.frame_width],
                                   self.sample_width, 0)
             data += (silence * missing_frames)
 
@@ -503,7 +503,7 @@ class AudioSegment(object):
         )
 
     @classmethod
-    def from_file_using_temporary_files(cls, file, format=None, codec=None, parameters=None, **kwargs):
+    def from_file_using_temporary_files(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
         orig_file = file
         file, close_file = _fd_or_path_or_tempfile(file, 'rb', tempfile=False)
 
@@ -526,7 +526,14 @@ class AudioSegment(object):
                 obj = cls._from_safe_wav(file)
                 if close_file:
                     file.close()
-                return obj
+                if start_second is None and duration is None:
+                    return obj
+                elif start_second is not None and duration is None:
+                    return obj[start_second*1000:]
+                elif start_second is None and duration is not None:
+                    return obj[:duration*1000]
+                else:
+                    return obj[start_second*1000:(start_second+duration)*1000]
             except:
                 file.seek(0)
         elif is_format("raw") or is_format("pcm"):
@@ -542,7 +549,14 @@ class AudioSegment(object):
             obj = cls(data=file.read(), metadata=metadata)
             if close_file:
                 file.close()
-            return obj
+            if start_second is None and duration is None:
+                return obj
+            elif start_second is not None and duration is None:
+                return obj[start_second * 1000:]
+            elif start_second is None and duration is not None:
+                return obj[:duration * 1000]
+            else:
+                return obj[start_second * 1000:(start_second + duration) * 1000]
 
         input_file = NamedTemporaryFile(mode='wb', delete=False)
         try:
@@ -581,9 +595,16 @@ class AudioSegment(object):
         conversion_command += [
             "-i", input_file.name,  # input_file options (filename last)
             "-vn",  # Drop any video streams if there are any
-            "-f", "wav",  # output options (filename last)
-            output.name
+            "-f", "wav"  # output options (filename last)
         ]
+
+        if start_second is not None:
+            conversion_command += ["-ss", str(start_second)]
+
+        if duration is not None:
+            conversion_command += ["-t", str(duration)]
+
+        conversion_command += [output.name]
 
         if parameters is not None:
             # extend arguments with arbitrary set
@@ -602,7 +623,7 @@ class AudioSegment(object):
             if p.returncode != 0:
                 raise CouldntDecodeError(
                     "Decoding failed. ffmpeg returned error code: {0}\n\nOutput from ffmpeg/avlib:\n\n{1}".format(
-                        p.returncode, p_err))
+                        p.returncode, p_err.decode(errors='ignore') ))
             obj = cls._from_safe_wav(output)
         finally:
             input_file.close()
@@ -610,10 +631,18 @@ class AudioSegment(object):
             os.unlink(input_file.name)
             os.unlink(output.name)
 
-        return obj
+        if start_second is None and duration is None:
+            return obj
+        elif start_second is not None and duration is None:
+            return obj[0:]
+        elif start_second is None and duration is not None:
+            return obj[:duration * 1000]
+        else:
+            return obj[0:duration * 1000]
+
 
     @classmethod
-    def from_file(cls, file, format=None, codec=None, parameters=None, **kwargs):
+    def from_file(cls, file, format=None, codec=None, parameters=None, start_second=None, duration=None, **kwargs):
         orig_file = file
         try:
             filename = fsdecode(file)
@@ -637,7 +666,14 @@ class AudioSegment(object):
 
         if is_format("wav"):
             try:
-                return cls._from_safe_wav(file)
+                if start_second is None and duration is None:
+                    return cls._from_safe_wav(file)
+                elif start_second is not None and duration is None:
+                    return cls._from_safe_wav(file)[start_second*1000:]
+                elif start_second is None and duration is not None:
+                    return cls._from_safe_wav(file)[:duration*1000]
+                else:
+                    return cls._from_safe_wav(file)[start_second*1000:(start_second+duration)*1000]
             except:
                 file.seek(0)
         elif is_format("raw") or is_format("pcm"):
@@ -650,7 +686,14 @@ class AudioSegment(object):
                 'channels': channels,
                 'frame_width': channels * sample_width
             }
-            return cls(data=file.read(), metadata=metadata)
+            if start_second is None and duration is None:
+                return cls(data=file.read(), metadata=metadata)
+            elif start_second is not None and duration is None:
+                return cls(data=file.read(), metadata=metadata)[start_second*1000:]
+            elif start_second is None and duration is not None:
+                return cls(data=file.read(), metadata=metadata)[:duration*1000]
+            else:
+                return cls(data=file.read(), metadata=metadata)[start_second*1000:(start_second+duration)*1000]
 
         conversion_command = [cls.converter,
                               '-y',  # always overwrite existing files
@@ -703,9 +746,16 @@ class AudioSegment(object):
 
         conversion_command += [
             "-vn",  # Drop any video streams if there are any
-            "-f", "wav",  # output options (filename last)
-            "-"
+            "-f", "wav"  # output options (filename last)
         ]
+
+        if start_second is not None:
+            conversion_command += ["-ss", str(start_second)]
+
+        if duration is not None:
+            conversion_command += ["-t", str(duration)]
+
+        conversion_command += ["-"]
 
         if parameters is not None:
             # extend arguments with arbitrary set
@@ -722,16 +772,24 @@ class AudioSegment(object):
                 file.close()
             raise CouldntDecodeError(
                 "Decoding failed. ffmpeg returned error code: {0}\n\nOutput from ffmpeg/avlib:\n\n{1}".format(
-                    p.returncode, p_err))
+                    p.returncode, p_err.decode(errors='ignore') ))
 
         p_out = bytearray(p_out)
         fix_wav_headers(p_out)
-        obj = cls._from_safe_wav(BytesIO(p_out))
+        p_out = bytes(p_out)
+        obj = cls(p_out)
 
         if close_file:
             file.close()
 
-        return obj
+        if start_second is None and duration is None:
+            return obj
+        elif start_second is not None and duration is None:
+            return obj[0:]
+        elif start_second is None and duration is not None:
+            return obj[:duration * 1000]
+        else:
+            return obj[0:duration * 1000]
 
     @classmethod
     def from_mp3(cls, file, parameters=None):
@@ -825,9 +883,9 @@ class AudioSegment(object):
         pcm_for_wav = self._data
         if self.sample_width == 1:
             # convert to unsigned integers for wav
-            pcm_for_wav = audioop.bias(self._data, 1, 128)
+            pcm_for_wav = pyaudioop.bias(self._data, 1, 128)
 
-        wave_data = wave.open(data, 'wb')
+        wave_data = pywave.open(data, 'wb')
         wave_data.setnchannels(self.channels)
         wave_data.setsampwidth(self.sample_width)
         wave_data.setframerate(self.frame_rate)
@@ -839,6 +897,7 @@ class AudioSegment(object):
 
         # for easy wav files, we're done (wav data is written directly to out_f)
         if easy_wav:
+            out_f.seek(0)
             return out_f
 
         output = NamedTemporaryFile(mode="w+b", delete=False)
@@ -910,7 +969,7 @@ class AudioSegment(object):
         if p.returncode != 0:
             raise CouldntEncodeError(
                 "Encoding failed. ffmpeg/avlib returned error code: {0}\n\nCommand:{1}\n\nOutput from ffmpeg/avlib:\n\n{2}".format(
-                    p.returncode, conversion_command, p_err))
+                    p.returncode, conversion_command, p_err.decode(errors='ignore') ))
 
         output.seek(0)
         out_f.write(output.read())
@@ -946,7 +1005,7 @@ class AudioSegment(object):
         frame_width = self.channels * sample_width
 
         return self._spawn(
-            audioop.lin2lin(self._data, self.sample_width, sample_width),
+            pyaudioop.lin2lin(self._data, self.sample_width, sample_width),
             overrides={'sample_width': sample_width, 'frame_width': frame_width}
         )
 
@@ -955,7 +1014,7 @@ class AudioSegment(object):
             return self
 
         if self._data:
-            converted, _ = audioop.ratecv(self._data, self.sample_width,
+            converted, _ = pyaudioop.ratecv(self._data, self.sample_width,
                                           self.channels, self.frame_rate,
                                           frame_rate, None)
         else:
@@ -969,12 +1028,12 @@ class AudioSegment(object):
             return self
 
         if channels == 2 and self.channels == 1:
-            fn = audioop.tostereo
+            fn = pyaudioop.tostereo
             frame_width = self.frame_width * 2
             fac = 1
             converted = fn(self._data, self.sample_width, fac, fac)
         elif channels == 1 and self.channels == 2:
-            fn = audioop.tomono
+            fn = pyaudioop.tomono
             frame_width = self.frame_width // 2
             fac = 0.5
             converted = fn(self._data, self.sample_width, fac, fac)
@@ -1024,7 +1083,7 @@ class AudioSegment(object):
 
     @property
     def rms(self):
-        return audioop.rms(self._data, self.sample_width)
+        return pyaudioop.rms(self._data, self.sample_width)
 
     @property
     def dBFS(self):
@@ -1035,7 +1094,7 @@ class AudioSegment(object):
 
     @property
     def max(self):
-        return audioop.max(self._data, self.sample_width)
+        return pyaudioop.max(self._data, self.sample_width)
 
     @property
     def max_possible_amplitude(self):
@@ -1064,11 +1123,11 @@ class AudioSegment(object):
         if self.channels == 1:
             data = self._data
         elif channel == 1:
-            data = audioop.tomono(self._data, self.sample_width, 1, 0)
+            data = pyaudioop.tomono(self._data, self.sample_width, 1, 0)
         else:
-            data = audioop.tomono(self._data, self.sample_width, 0, 1)
+            data = pyaudioop.tomono(self._data, self.sample_width, 0, 1)
 
-        return float(audioop.avg(data, self.sample_width)) / self.max_possible_amplitude
+        return float(pyaudioop.avg(data, self.sample_width)) / self.max_possible_amplitude
 
     def remove_dc_offset(self, channel=None, offset=None):
         """
@@ -1087,14 +1146,14 @@ class AudioSegment(object):
 
         def remove_data_dc(data, off):
             if not off:
-                off = audioop.avg(data, self.sample_width)
-            return audioop.bias(data, self.sample_width, -off)
+                off = pyaudioop.avg(data, self.sample_width)
+            return pyaudioop.bias(data, self.sample_width, -off)
 
         if self.channels == 1:
             return self._spawn(data=remove_data_dc(self._data, offset))
 
-        left_channel = audioop.tomono(self._data, self.sample_width, 1, 0)
-        right_channel = audioop.tomono(self._data, self.sample_width, 0, 1)
+        left_channel = pyaudioop.tomono(self._data, self.sample_width, 1, 0)
+        right_channel = pyaudioop.tomono(self._data, self.sample_width, 0, 1)
 
         if not channel or channel == 1:
             left_channel = remove_data_dc(left_channel, offset)
@@ -1102,14 +1161,14 @@ class AudioSegment(object):
         if not channel or channel == 2:
             right_channel = remove_data_dc(right_channel, offset)
 
-        left_channel = audioop.tostereo(left_channel, self.sample_width, 1, 0)
-        right_channel = audioop.tostereo(right_channel, self.sample_width, 0, 1)
+        left_channel = pyaudioop.tostereo(left_channel, self.sample_width, 1, 0)
+        right_channel = pyaudioop.tostereo(right_channel, self.sample_width, 0, 1)
 
-        return self._spawn(data=audioop.add(left_channel, right_channel,
+        return self._spawn(data=pyaudioop.add(left_channel, right_channel,
                                             self.sample_width))
 
     def apply_gain(self, volume_change):
-        return self._spawn(data=audioop.mul(self._data, self.sample_width,
+        return self._spawn(data=pyaudioop.mul(self._data, self.sample_width,
                                             db_to_float(float(volume_change))))
 
     def overlay(self, seg, position=0, loop=False, times=None, gain_during_overlay=None):
@@ -1173,11 +1232,11 @@ class AudioSegment(object):
 
             if gain_during_overlay:
                 seg1_overlaid = seg1[pos:pos + seg2_len]
-                seg1_adjusted_gain = audioop.mul(seg1_overlaid, self.sample_width,
+                seg1_adjusted_gain = pyaudioop.mul(seg1_overlaid, self.sample_width,
                                                  db_to_float(float(gain_during_overlay)))
-                output.write(audioop.add(seg1_adjusted_gain, seg2, sample_width))
+                output.write(pyaudioop.add(seg1_adjusted_gain, seg2, sample_width))
             else:
-                output.write(audioop.add(seg1[pos:pos + seg2_len], seg2,
+                output.write(pyaudioop.add(seg1[pos:pos + seg2_len], seg2,
                                          sample_width))
             pos += seg2_len
 
@@ -1192,7 +1251,7 @@ class AudioSegment(object):
         seg1, seg2 = AudioSegment._sync(self, seg)
 
         if not crossfade:
-            return seg1._spawn(seg1._data + seg2._data)
+            return seg1._spawn(bytes(seg1._data) + seg2._data)
         elif crossfade > len(self):
             raise ValueError("Crossfade is longer than the original AudioSegment ({}ms > {}ms)".format(
                 crossfade, len(self)
@@ -1270,7 +1329,7 @@ class AudioSegment(object):
         # original data - up until the crossfade portion, as is
         before_fade = self[:start]._data
         if from_gain != 0:
-            before_fade = audioop.mul(before_fade,
+            before_fade = pyaudioop.mul(before_fade,
                                       self.sample_width,
                                       from_power)
         output.append(before_fade)
@@ -1286,7 +1345,7 @@ class AudioSegment(object):
             for i in range(duration):
                 volume_change = from_power + (scale_step * i)
                 chunk = self[start + i]
-                chunk = audioop.mul(chunk._data,
+                chunk = pyaudioop.mul(chunk._data,
                                     self.sample_width,
                                     volume_change)
 
@@ -1300,14 +1359,14 @@ class AudioSegment(object):
             for i in range(int(fade_frames)):
                 volume_change = from_power + (scale_step * i)
                 sample = self.get_frame(int(start_frame + i))
-                sample = audioop.mul(sample, self.sample_width, volume_change)
+                sample = pyaudioop.mul(sample, self.sample_width, volume_change)
 
                 output.append(sample)
 
         # original data after the crossfade portion, at the new volume
         after_fade = self[end:]._data
         if to_gain != 0:
-            after_fade = audioop.mul(after_fade,
+            after_fade = pyaudioop.mul(after_fade,
                                      self.sample_width,
                                      db_to_float(to_gain))
         output.append(after_fade)
@@ -1322,7 +1381,7 @@ class AudioSegment(object):
 
     def reverse(self):
         return self._spawn(
-            data=audioop.reverse(self._data, self.sample_width)
+            data=pyaudioop.reverse(self._data, self.sample_width)
         )
 
     def _repr_html_(self):

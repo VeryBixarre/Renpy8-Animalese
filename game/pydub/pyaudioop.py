@@ -6,7 +6,10 @@ except ImportError:
     from builtins import min as builtin_min
 import math
 import struct
-from fractions import gcd
+try:
+    from fractions import gcd
+except ImportError:  # Python 3.9+
+    from math import gcd
 from ctypes import create_string_buffer
 
 
@@ -30,7 +33,7 @@ def _sample_count(cp, size):
 
 
 def _get_samples(cp, size, signed=True):
-    for i in range(_sample_count(cp, size)):
+    for i in range(int(_sample_count(cp, size))):
         yield _get_sample(cp, size, i, signed)
 
 
@@ -47,7 +50,7 @@ def _get_sample(cp, size, i, signed=True):
     fmt = _struct_format(size, signed)
     start = i * size
     end = start + size
-    return struct.unpack_from(fmt, buffer(cp)[start:end])[0]
+    return struct.unpack_from(fmt, memoryview(cp)[start:end])[0]
 
 
 def _put_sample(cp, size, i, val, signed=True):
@@ -181,7 +184,7 @@ def findfit(cp1, cp2):
         aj_lm1 = _get_sample(cp1, size, i + len2 - 1)
 
         sum_aij_2 += aj_lm1**2 - aj_m1**2
-        sum_aij_ri = _sum2(buffer(cp1)[i*size:], cp2, len2)
+        sum_aij_ri = _sum2(memoryview(cp1)[i*size:], cp2, len2)
 
         result = (sum_ri_2 * sum_aij_2 - sum_aij_ri * sum_aij_ri) / sum_aij_2
 
@@ -189,7 +192,7 @@ def findfit(cp1, cp2):
             best_result = result
             best_i = i
 
-    factor = _sum2(buffer(cp1)[best_i*size:], cp2, len2) / sum_ri_2
+    factor = _sum2(memoryview(cp1)[best_i*size:], cp2, len2) / sum_ri_2
 
     return best_i, factor
 
@@ -386,7 +389,7 @@ def add(cp1, cp2, size):
     sample_count = _sample_count(cp1, size)
     result = create_string_buffer(len(cp1))
 
-    for i in range(sample_count):
+    for i in range(int(sample_count)):
         sample1 = getsample(cp1, size, i)
         sample2 = getsample(cp2, size, i)
 
@@ -428,10 +431,9 @@ def lin2lin(cp, size, size2):
         return cp
 
     new_len = (len(cp) / size) * size2
+    result = create_string_buffer(int(new_len))
 
-    result = create_string_buffer(new_len)
-
-    for i in range(_sample_count(cp, size)):
+    for i in range(int(_sample_count(cp, size))):
         sample = _get_sample(cp, size, i)
         if size < size2:
             sample = sample << (4 * size2 / size)
@@ -487,7 +489,7 @@ def ratecv(cp, size, nchannels, inrate, outrate, state, weightA=1, weightB=0):
     ceiling = (q + 1) * outrate
     nbytes = ceiling * bytes_per_frame
 
-    result = create_string_buffer(nbytes)
+    result = create_string_buffer(int(nbytes))
 
     samples = _get_samples(cp, size)
     out_i = 0
@@ -499,13 +501,13 @@ def ratecv(cp, size, nchannels, inrate, outrate, state, weightA=1, weightB=0):
 
                 # slice off extra bytes
                 trim_index = (out_i * bytes_per_frame) - len(retval)
-                retval = buffer(retval)[:trim_index]
+                retval = memoryview(retval)[:trim_index]
 
                 return (retval, (d, tuple(samps)))
 
             for chan in range(nchannels):
                 prev_i[chan] = cur_i[chan]
-                cur_i[chan] = samples.next()
+                cur_i[chan] = next(samples)
 
                 cur_i[chan] = (
                     (weightA * cur_i[chan] + weightB * prev_i[chan])
@@ -521,9 +523,9 @@ def ratecv(cp, size, nchannels, inrate, outrate, state, weightA=1, weightB=0):
                     (prev_i[chan] * d + cur_i[chan] * (outrate - d))
                     / outrate
                 )
-                _put_sample(result, size, out_i, _overflow(cur_o, size))
+                _put_sample(result, size, out_i, int(_overflow(cur_o, size)))
                 out_i += 1
-                d -= inrate
+            d -= inrate
 
 
 def lin2ulaw(cp, size):

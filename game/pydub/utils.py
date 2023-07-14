@@ -10,11 +10,6 @@ from tempfile import TemporaryFile
 from warnings import warn
 from functools import wraps
 
-try:
-    import audioop
-except ImportError:
-    import pyaudioop as audioop
-
 if sys.version_info >= (3, 0):
     basestring = str
 
@@ -415,3 +410,20 @@ def get_supported_decoders():
 
 def get_supported_encoders():
     return get_supported_codecs()[1]
+
+def stereo_to_ms(audio_segment):
+	'''
+	Left-Right -> Mid-Side
+	'''
+	channel = audio_segment.split_to_mono()
+	channel = [channel[0].overlay(channel[1]), channel[0].overlay(channel[1].invert_phase())]
+	return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
+
+def ms_to_stereo(audio_segment):
+	'''
+	Mid-Side -> Left-Right
+	'''
+	channel = audio_segment.split_to_mono()
+	channel = [channel[0].overlay(channel[1]) - 3, channel[0].overlay(channel[1].invert_phase()) - 3]
+	return AudioSegment.from_mono_audiosegments(channel[0], channel[1])
+
